@@ -26,23 +26,39 @@ from models.audio_gpt2 import AudioGPT2
 ENCODERS = ["wav2vec2-base", "wav2vec2-large-emotion", "wavlm-large", "hubert-large"]
 ENCODER_LABELS = ["wav2vec2\nbase", "wav2vec2\nlarge-emotion", "wavlm\nlarge", "hubert\nlarge"]
 
-VAL_SPEAKERS  = ["09", "10"]
-TEST_SPEAKERS = ["03", "08"]
 TARGET_AUDIO_LEN = 50
 BATCH_SIZE = 8
-OUTPUT_DIR = "checkpoints"
+
+DATASET_CONFIGS = {
+    "emodb": {
+        "embeddings_prefix": "",
+        "checkpoint_dir": "checkpoints",
+        "val_speakers": ["09", "10"],
+        "test_speakers": ["03", "08"],
+    },
+    "aibo": {
+        "embeddings_prefix": "aibo_",
+        "checkpoint_dir": "checkpoints_AIBO",
+        "val_speakers": ["Ohm_31", "Ohm_32"],
+        "test_speakers": [f"Mont_{i:02d}" for i in range(1, 26)],
+    },
+}
 
 
-def _evaluate_checkpoint(checkpoint_path, device):
+def _evaluate_checkpoint(checkpoint_path, device, dataset_name):
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     encoder = checkpoint["encoder"]
     idx2label = checkpoint["idx2label"]
     num_classes = len(idx2label)
 
-    embeddings_path = f"embeddings/{encoder}_embeddings.pt"
+    # Prefer the dataset recorded in the checkpoint; fall back to the CLI arg.
+    ds_name = checkpoint.get("dataset", dataset_name)
+    ds = DATASET_CONFIGS[ds_name]
+
+    embeddings_path = f"embeddings/{ds['embeddings_prefix']}{encoder}_embeddings.pt"
     dataset = EmoDBFusionDataset(embeddings_path)
     _, _, test_idx = speaker_independent_split(
-        dataset, val_speakers=VAL_SPEAKERS, test_speakers=TEST_SPEAKERS
+        dataset, val_speakers=ds["val_speakers"], test_speakers=ds["test_speakers"]
     )
     test_loader = DataLoader(
         Subset(dataset, test_idx), batch_size=BATCH_SIZE, shuffle=False
@@ -136,16 +152,34 @@ def _plot_confusion_matrix(result, output_path):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dataset",
+        default="aibo",
+        choices=list(DATASET_CONFIGS),
+        help="Which dataset's checkpoints to compare.",
+    )
+    parser.add_argument(
+        "--prompt_type",
+        default="base",
+        help="Prompt type used when training (determines checkpoint filename).",
+    )
+    args = parser.parse_args()
+
+    ds = DATASET_CONFIGS[args.dataset]
+    output_dir = ds["checkpoint_dir"]
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results = []
 
     for encoder in ENCODERS:
-        checkpoint_path = os.path.join(OUTPUT_DIR, f"{encoder}_best.pt")
+        checkpoint_path = os.path.join(output_dir, f"{encoder}_{args.prompt_type}_best.pt")
         if not os.path.exists(checkpoint_path):
             print(f"Skipping {encoder} — checkpoint not found at {checkpoint_path}")
             continue
         print(f"\nEvaluating {encoder}...")
-        result = _evaluate_checkpoint(checkpoint_path, device)
+        result = _evaluate_checkpoint(checkpoint_path, device, args.dataset)
         results.append(result)
         print(f"  Accuracy: {result['accuracy']:.4f}  |  Weighted F1: {result['f1']:.4f}")
 
@@ -153,11 +187,11 @@ def main():
         print("No checkpoints found. Train at least one encoder first.")
         return
 
-    _plot_bar_chart(results, os.path.join(OUTPUT_DIR, "encoder_comparison.png"))
+    _plot_bar_chart(results, os.path.join(output_dir, "encoder_comparison.png"))
 
     best = max(results, key=lambda r: r["f1"])
     print(f"\nBest encoder by F1: {best['encoder']} ({best['f1']:.4f})")
-    _plot_confusion_matrix(best, os.path.join(OUTPUT_DIR, "best_encoder_cm.png"))
+    _plot_confusion_matrix(best, os.path.join(output_dir, "best_encoder_cm.png"))
 
     print("\n── Summary ──────────────────────────────────────────")
     print(f"  {'Encoder':<30} {'Accuracy':>8}   {'W-F1':>6}")

@@ -9,10 +9,15 @@ from features.feature_prompt import acoustic_features_to_text
 
 
 def extract_speaker_id(file_path: str) -> str:
-    basename = os.path.basename(file_path)
-    if len(basename) < 2:
+    basename = os.path.splitext(os.path.basename(file_path))[0]
+    if basename and basename[0].isdigit():
+        # EMoDB: "03a01Wa" -> "03"
+        return basename[:2]
+    # AIBO: "Mont_01_000_00" -> "Mont_01"
+    parts = basename.split("_")
+    if len(parts) < 2:
         return "unknown"
-    return basename[:2]
+    return f"{parts[0]}_{parts[1]}"
 
 
 class EmoDBGenerationDataset(Dataset):
@@ -104,6 +109,7 @@ class EmoDBGenerationDataset(Dataset):
                 torch.save(self.acoustic_feature_cache, cache_path)
                 print(f"Saved acoustic feature cache to: {cache_path}")
 
+        self.label_names = [self.idx2label[i] for i in range(len(self.idx2label))]
         self.input_ids_list = []
         self.lm_labels_list = []
         self.class_labels_list = []
@@ -126,9 +132,9 @@ class EmoDBGenerationDataset(Dataset):
         if self.use_feature_prompt:
             features = self.acoustic_feature_cache[idx]
             feature_text = acoustic_features_to_text(features)
-            return get_prompt(self.prompt_type, features=feature_text)
+            return get_prompt(self.prompt_type, features=feature_text, labels=self.label_names)
 
-        return get_prompt(self.prompt_type)
+        return get_prompt(self.prompt_type, labels=self.label_names)
 
     def _build_generation_sample(self, idx: int):
         prompt = self._build_prompt_for_sample(idx)

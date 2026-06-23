@@ -15,26 +15,46 @@ from models.compression.compressor import AudioCompressor
 from models.audio_gpt2_generation import AudioGPT2Generation
 
 
+DATASET_CONFIGS = {
+    "emodb": {
+        "embeddings_prefix": "",
+        "checkpoint_dir": "checkpoints",
+        "val_speakers": ["09", "10"],
+        "test_speakers": ["03", "08"],
+    },
+    "aibo": {
+        "embeddings_prefix": "aibo_",
+        "checkpoint_dir": "checkpoints_AIBO",
+        "val_speakers": ["Ohm_31", "Ohm_32"],
+        "test_speakers": [f"Mont_{i:02d}" for i in range(1, 26)],
+    },
+}
+
+
 def _build_config(
     encoder: str,
+    dataset: str = "aibo",
     prompt_type: str = "generation",
     lora_rank: int = 0,
     lora_lr: float = 1e-4,
 ) -> dict:
+    ds = DATASET_CONFIGS[dataset]
     tag = f"{encoder}_{prompt_type}_generation"
 
     if lora_rank > 0:
         tag += f"_lora{lora_rank}"
 
-    os.makedirs("checkpoints", exist_ok=True)
+    checkpoint_dir = ds["checkpoint_dir"]
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
     return {
+        "dataset": dataset,
         "encoder": encoder,
         "prompt_type": prompt_type,
         "max_prompt_length": 128 if "feature" in prompt_type else 96,
         "lora_rank": lora_rank,
         "lora_lr": lora_lr,
-        "embeddings_path": f"embeddings/{encoder}_embeddings.pt",
+        "embeddings_path": f"embeddings/{ds['embeddings_prefix']}{encoder}_embeddings.pt",
         "batch_size": 4,
         "lr": 1e-5,
         "epochs": 100,
@@ -42,9 +62,9 @@ def _build_config(
         "dropout": 0.3,
         "target_audio_len": 50,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
-        "val_speakers": ["09", "10"],
-        "test_speakers": ["03", "08"],
-        "checkpoint_path": f"checkpoints/{tag}_best.pt",
+        "val_speakers": ds["val_speakers"],
+        "test_speakers": ds["test_speakers"],
+        "checkpoint_path": f"{checkpoint_dir}/{tag}_best.pt",
     }
 
 
@@ -73,9 +93,10 @@ def smoke_test(config):
 
 def train(config):
     if not os.path.exists(config["embeddings_path"]):
+        preprocessing_script = f"models/audio_encoder/preprocessing_{config['dataset']}.py"
         print(
             f"ERROR: '{config['embeddings_path']}' not found. "
-            "Run models/audio_encoder/preprocessing.py first to generate the embeddings file."
+            f"Run {preprocessing_script} first to generate the embeddings file."
         )
         sys.exit(1)
 
@@ -166,6 +187,7 @@ def train(config):
     best_val_loss = float("inf")
 
     print("\nGeneration training configuration:")
+    print(f"  Dataset:      {config['dataset']}")
     print(f"  Encoder:      {config['encoder']}")
     print(f"  Prompt type:  {config['prompt_type']}")
     print(f"  Prompt length:{config['max_prompt_length']}")
@@ -299,6 +321,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--dataset",
+        default="aibo",
+        choices=list(DATASET_CONFIGS),
+        help="Which dataset to train on.",
+    )
+
+    parser.add_argument(
         "--encoder",
         default="wavlm-large",
         choices=[
@@ -338,6 +367,7 @@ if __name__ == "__main__":
 
     config = _build_config(
         encoder=args.encoder,
+        dataset=args.dataset,
         prompt_type=args.prompt_type,
         lora_rank=args.lora_rank,
         lora_lr=args.lora_lr,

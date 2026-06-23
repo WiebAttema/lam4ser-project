@@ -54,20 +54,39 @@ def _plot(svm_acc, probe_results, out="baselines/comparison.png"):
     plt.close()
 
 
+DATASET_SPLITS = {
+    "emodb": "train speakers 01-02,04-07,11-16 | val 09-10 | test 03-08",
+    "aibo": "train Ohm (minus Ohm_31,32) | val Ohm_31,Ohm_32 | test Mont_01-25",
+}
+
+
 def main():
-    emb_files = sorted(glob.glob("embeddings/*_embeddings.pt"))
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dataset",
+        default="aibo",
+        choices=["emodb", "aibo"],
+        help="Which dataset to run baselines on.",
+    )
+    args = parser.parse_args()
+
+    prefix = "aibo_" if args.dataset == "aibo" else ""
+    emb_files = sorted(glob.glob(f"embeddings/{prefix}*_embeddings.pt"))
 
     print("=" * 64)
-    print("RUNNING BASELINES")
+    print(f"RUNNING BASELINES  (dataset={args.dataset})")
     print("=" * 64)
 
-    svm_result = run_svm()
+    svm_result = run_svm(args.dataset)
 
     probe_results = {}
     for path in emb_files:
         stem = os.path.splitext(os.path.basename(path))[0]
         encoder = stem.removesuffix("_embeddings")
-        probe_results[encoder] = run_probes(path)
+        if args.dataset == "aibo":
+            encoder = encoder.removeprefix("aibo_")
+        probe_results[encoder] = run_probes(path, args.dataset)
 
     encoders = list(probe_results.keys())
     col = 22
@@ -85,8 +104,13 @@ def main():
     print(row("linear probe", [probe_results[e]["linear"]["accuracy"]             for e in encoders]))
     print(row("MLP probe",    [probe_results[e]["mlp"]["accuracy"]                for e in encoders]))
     print(row("AudioGPT2",    [_AUDIOGPT2.get(e, {}).get("accuracy", float("nan")) for e in encoders]))
+    if args.dataset == "aibo":
+        print("  " + "-" * (22 + col * len(encoders)))
+        print(row("SVM + MFCC (UAR)",   [svm_result["uar"]]                       * len(encoders)))
+        print(row("linear probe (UAR)", [probe_results[e]["linear"]["uar"]        for e in encoders]))
+        print(row("MLP probe (UAR)",    [probe_results[e]["mlp"]["uar"]           for e in encoders]))
     print("  " + "-" * (22 + col * len(encoders)))
-    print("  Split: train speakers 11-16 | val 09-10 | test 03-08")
+    print(f"  Split: {DATASET_SPLITS[args.dataset]}")
     print("=" * (24 + col * len(encoders)))
 
     _plot(svm_result["accuracy"], probe_results)

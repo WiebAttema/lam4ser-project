@@ -14,6 +14,11 @@ data/*.pt
 embeddings/
 *.pt
 loss_curve.png
+dataset/
+
+AIBO_runs.txt
+
+.vscode/settings.json
 
 # SLURM logs
 *.out

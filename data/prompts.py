@@ -6,7 +6,8 @@ This file centralizes all prompt variants used by both:
 2. autoregressive label generation
 """
 
-LABELS = [
+# EMoDB (7-class):
+EMODB_LABELS = [
     "anger",
     "boredom",
     "disgust",
@@ -16,8 +17,17 @@ LABELS = [
     "sadness",
 ]
 
+# AIBO (5-class, IS2009 Emotion Challenge):
+AIBO_LABELS = [
+    "anger",
+    "emphatic",
+    "neutral",
+    "positive",
+    "rest",
+]
 
-LABEL_TEXT = ", ".join(LABELS)
+# Default kept for backwards compatibility with evaluation scripts that import LABELS directly.
+LABELS = AIBO_LABELS
 
 
 PROMPTS = {
@@ -27,46 +37,55 @@ PROMPTS = {
 
     "label_list": (
         "Classify the emotion of this speech. "
-        f"Possible labels are {LABEL_TEXT}."
+        "Possible labels are {label_text}."
     ),
 
     "feature": (
         "Classify the emotion of this speech. "
         "Acoustic features: {features}. "
-        f"Possible labels are {LABEL_TEXT}."
+        "Possible labels are {label_text}."
+    ),
+
+    "feature_speaker": (
+        "Classify the emotion of this speech. "
+        "Acoustic features: {features}. "
+        "Possible labels are {label_text}."
     ),
 
     "generation": (
         "Classify the emotion of this speech. "
-        f"Possible labels are {LABEL_TEXT}. "
+        "Possible labels are {label_text}. "
         "Answer with one label only:"
     ),
 
     "feature_generation": (
         "Classify the emotion of this speech. "
         "Acoustic features: {features}. "
-        f"Possible labels are {LABEL_TEXT}. "
+        "Possible labels are {label_text}. "
         "Answer with one label only:"
     ),
 }
 
 
-def get_prompt(prompt_type: str, features: str | None = None) -> str:
+def get_prompt(
+    prompt_type: str,
+    features: str | None = None,
+    labels: list[str] | None = None,
+) -> str:
     """
     Build a prompt string from the selected prompt type.
 
     Args:
         prompt_type:
-            One of:
-            - base
-            - label_list
-            - feature
-            - generation
-            - feature_generation
+            One of: base, label_list, feature, generation, feature_generation
 
         features:
             Textual acoustic feature description, for example:
             "high pitch, high energy, short duration"
+
+        labels:
+            Emotion class names to list in the prompt.
+            Defaults to LABELS (AIBO 5-class) when not provided.
 
     Returns:
         Prompt string.
@@ -77,14 +96,17 @@ def get_prompt(prompt_type: str, features: str | None = None) -> str:
             f"Available prompt types: {list(PROMPTS.keys())}"
         )
 
-    template = PROMPTS[prompt_type]
+    text = PROMPTS[prompt_type]
 
-    if "{features}" in template:
+    if "{label_text}" in text:
+        text = text.replace("{label_text}", ", ".join(labels if labels is not None else LABELS))
+
+    if "{features}" in text:
         if features is None:
             raise ValueError(
                 f"Prompt type '{prompt_type}' requires acoustic feature text, "
                 "but features=None was provided."
             )
-        return template.format(features=features)
+        text = text.replace("{features}", features)
 
-    return template
+    return text

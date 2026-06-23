@@ -12,38 +12,57 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report, con
 
 from data.generation_dataset import EmoDBGenerationDataset
 from data.dataset import speaker_independent_split
-from data.prompts import LABELS, get_prompt
+from data.prompts import get_prompt
 from features.acoustic_features import extract_acoustic_features
 from features.feature_prompt import acoustic_features_to_text
 from models.compression.compressor import AudioCompressor
 from models.audio_gpt2_generation import AudioGPT2Generation
 
 
+DATASET_CONFIGS = {
+    "emodb": {
+        "embeddings_prefix": "",
+        "checkpoint_dir": "checkpoints",
+        "val_speakers": ["09", "10"],
+        "test_speakers": ["03", "08"],
+    },
+    "aibo": {
+        "embeddings_prefix": "aibo_",
+        "checkpoint_dir": "checkpoints_AIBO",
+        "val_speakers": ["Ohm_31", "Ohm_32"],
+        "test_speakers": [f"Mont_{i:02d}" for i in range(1, 26)],
+    },
+}
+
+
 def _build_config(
     encoder: str,
-    prompt_type: str,
+    dataset: str = "aibo",
+    prompt_type: str = "generation",
     checkpoint_path: str | None = None,
 ) -> dict:
+    ds = DATASET_CONFIGS[dataset]
     tag = f"{encoder}_{prompt_type}_generation"
 
     return {
+        "dataset": dataset,
         "encoder": encoder,
         "prompt_type": prompt_type,
         "max_prompt_length": 128 if "feature" in prompt_type else 96,
-        "embeddings_path": f"embeddings/{encoder}_embeddings.pt",
+        "embeddings_path": f"embeddings/{ds['embeddings_prefix']}{encoder}_embeddings.pt",
         "batch_size": 1,
         "adapter_dim": 64,
         "dropout": 0.3,
         "target_audio_len": 50,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
-        "val_speakers": ["09", "10"],
-        "test_speakers": ["03", "08"],
-        "checkpoint_path": checkpoint_path or f"checkpoints/{tag}_best.pt",
+        "val_speakers": ds["val_speakers"],
+        "test_speakers": ds["test_speakers"],
+        "checkpoint_path": checkpoint_path or f"{ds['checkpoint_dir']}/{tag}_best.pt",
         "max_new_tokens": 5,
     }
 
 
-def normalize_generated_label(text: str) -> str | None:
+def normalize_generated_label(text: str, labels: list[str]) -> str | None:
     """
     Map generated text back to one of the emotion labels.
 
@@ -54,7 +73,7 @@ def normalize_generated_label(text: str) -> str | None:
     """
     text = text.lower().strip()
 
-    for label in LABELS:
+    for label in labels:
         if label in text:
             return label
 
@@ -63,22 +82,16 @@ def normalize_generated_label(text: str) -> str | None:
 
 def build_prompt_for_eval(dataset, idx: int) -> str:
     """
-    Rebuild only the prompt part for generation.
-
-    During training, the dataset input is:
-        prompt + answer
-
-    During evaluation, we should start from:
-        prompt
-
-    and let the model generate the answer.
+    Rebuild only the prompt part for generation (without the answer).
     """
+    label_names = [dataset.idx2label[i] for i in range(len(dataset.idx2label))]
+
     if dataset.use_feature_prompt:
         features = dataset.acoustic_feature_cache[idx]
         feature_text = acoustic_features_to_text(features)
-        return get_prompt(dataset.prompt_type, features=feature_text)
+        return get_prompt(dataset.prompt_type, features=feature_text, labels=label_names)
 
-    return get_prompt(dataset.prompt_type)
+    return get_prompt(dataset.prompt_type, labels=label_names)
 
 
 @torch.no_grad()
@@ -182,7 +195,10 @@ def evaluate(config):
     generated_answers = []
     generated_full_texts = []
 
+    label_names = [dataset.idx2label[i] for i in range(len(dataset.idx2label))]
+
     print("\nGeneration evaluation configuration:")
+    print(f"  Dataset:     {config['dataset']}")
     print(f"  Encoder:     {config['encoder']}")
     print(f"  Prompt type: {config['prompt_type']}")
     print(f"  Device:      {device}")
@@ -223,7 +239,7 @@ def evaluate(config):
 
         answer_text = full_text[len(prompt):].strip()
 
-        pred_label = normalize_generated_label(answer_text)
+        pred_label = normalize_generated_label(answer_text, label_names)
 
         true_label = dataset.idx2label[int(class_label)]
 
@@ -237,7 +253,7 @@ def evaluate(config):
         generated_answers.append(answer_text)
         generated_full_texts.append(full_text)
 
-    all_eval_labels = LABELS + ["invalid"]
+    all_eval_labels = label_names + ["invalid"]
 
     acc = accuracy_score(y_true, y_pred)
     weighted_f1 = f1_score(
@@ -294,6 +310,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "--dataset",
+        default="aibo",
+        choices=list(DATASET_CONFIGS),
+        help="Which dataset the checkpoint was trained on.",
+    )
+
+    parser.add_argument(
         "--encoder",
         default="wavlm-large",
         choices=[
@@ -325,6 +348,7 @@ if __name__ == "__main__":
 
     config = _build_config(
         encoder=args.encoder,
+        dataset=args.dataset,
         prompt_type=args.prompt_type,
         checkpoint_path=args.checkpoint_path,
     )
