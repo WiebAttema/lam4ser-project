@@ -5,8 +5,8 @@ Usage:
     python models/audio_encoder/preprocessing_aibo.py --encoder wavlm-large
     python models/audio_encoder/preprocessing_aibo.py --encoder wav2vec2-large-emotion
     python models/audio_encoder/preprocessing_aibo.py  # defaults to wav2vec2-base
-
-To add a new encoder: add an entry to ENCODERS below.
+    python models/audio_encoder/preprocessing_aibo.py --encoder qwen2-audio --limit 5  # smoke test
+    python models/audio_encoder/preprocessing_aibo.py --encoder qwen2-audio --pooled
 """
 import argparse
 import os
@@ -17,6 +17,7 @@ import audiofile
 import numpy as np
 import torch
 from transformers import (
+    AutoProcessor,
     HubertModel,
     Wav2Vec2FeatureExtractor,
     Wav2Vec2Model,
@@ -84,6 +85,26 @@ ENCODERS: dict = {
     ),
 }
 
+# Audio encoders pulled out of LALMs
+LALM_MODELS: dict[str, str] = {
+    "qwen2-audio": "Qwen/Qwen2-Audio-7B",
+    "audio-flamingo-3": "nvidia/audio-flamingo-3-hf",
+}
+# d_model of the Whisper-style encoder used by all our LALM_MODELS
+LALM_HIDDEN_DIM = 1280
+
+# Model class per LALM encoder
+def _load_lalm_full_model(encoder_name: str, model_id: str):
+    if encoder_name == "qwen2-audio":
+        from transformers import Qwen2AudioForConditionalGeneration as ModelCls
+    elif encoder_name == "audio-flamingo-3":
+        from transformers import AudioFlamingo3ForConditionalGeneration as ModelCls
+    else:
+        raise ValueError(f"No model class registered for LALM encoder {encoder_name!r}")
+    return ModelCls.from_pretrained(
+        model_id, torch_dtype=torch.float16, low_cpu_mem_usage=True,
+    )
+
 
 def _load_aibo_index() -> list[tuple[str, str]]:
     """Read the IS2009 5-class label file.
@@ -109,15 +130,24 @@ def _load_aibo_index() -> list[tuple[str, str]]:
     return index
 
 
-def extract(encoder_name: str, output_path: str | None = None, limit: int | None = None) -> str:
-    spec = ENCODERS[encoder_name]
+def extract(encoder_name: str, output_path: str | None = None, limit: int | None = None,
+    pooled: bool = False) -> str:
+    is_lalm = encoder_name in LALM_MODELS
+    if is_lalm:
+        model_id = LALM_MODELS[encoder_name]
+        hidden_dim = LALM_HIDDEN_DIM
+    else:
+        spec = ENCODERS[encoder_name]
+        model_id = spec.model_id
+        hidden_dim = spec.hidden_dim
 
     if output_path is None:
         os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
-        output_path = os.path.join(EMBEDDINGS_DIR, f"aibo_{encoder_name}_embeddings.pt")
+        suffix = "_pooled" if pooled else ""
+        output_path = os.path.join(EMBEDDINGS_DIR, f"aibo_{encoder_name}{suffix}_embeddings.pt")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Encoder : {encoder_name} ({spec.model_id})")
+    print(f"Encoder : {encoder_name} ({model_id})")
     print(f"Device  : {device}")
     print(f"Output  : {output_path}")
 
@@ -131,9 +161,53 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
     label2idx = {label: idx for idx, label in enumerate(emotion_classes)}
     idx2label = {idx: label for label, idx in label2idx.items()}
 
-    print(f"\nLoading {spec.model_id}...")
-    processor = spec.processor_cls.from_pretrained(spec.model_id)
-    model = spec.model_cls.from_pretrained(spec.model_id).to(device).eval()
+    print(f"\nLoading {model_id}...")
+    if is_lalm:
+        # Load the full model once, keep only the audio encoder submodule, 
+        # and drop the second half.
+        processor = AutoProcessor.from_pretrained(model_id)
+        feature_extractor = processor.feature_extractor
+        full_model = _load_lalm_full_model(encoder_name, model_id)
+        backbone = full_model.model if hasattr(full_model, "model") else full_model
+        model = backbone.audio_tower
+        del backbone.language_model
+        if encoder_name == "audio-flamingo-3":
+            # AudioFlamingo3Encoder debug
+            model = model.float()
+        model = model.to(device).eval()
+
+        def encode(signal: np.ndarray) -> torch.Tensor:
+            inputs = feature_extractor(
+                signal, sampling_rate=SAMPLING_RATE, return_tensors="pt",
+                return_attention_mask=True,
+            )
+            input_features = inputs.input_features.to(device=device, dtype=model.dtype)
+            mask = inputs.attention_mask.to(device)
+            with torch.no_grad():
+                # Qwen2AudioEncoder ignores masking and takes `attention_mask`; 
+                # AudioFlamingo3Encoder requires a mask and takes it as `input_features_mask`
+                if encoder_name == "audio-flamingo-3":
+                    out = model(input_features, input_features_mask=mask)
+                else:
+                    out = model(input_features, attention_mask=mask)
+                hidden = out.last_hidden_state.squeeze(0).float().cpu()
+            # Mean pool if requested
+            return hidden.mean(dim=0, keepdim=True) if pooled else hidden
+    else:
+        processor = spec.processor_cls.from_pretrained(spec.model_id)
+        model = spec.model_cls.from_pretrained(spec.model_id).to(device).eval()
+
+        def encode(signal: np.ndarray) -> torch.Tensor:
+            inputs = processor(
+                signal,
+                sampling_rate=SAMPLING_RATE,
+                return_tensors="pt",
+                padding=False,
+            )
+            input_values = inputs.input_values.to(device)
+            with torch.no_grad():
+                hidden = model(input_values).last_hidden_state.squeeze(0).cpu()
+            return hidden.mean(dim=0, keepdim=True) if pooled else hidden
 
     embeddings, labels, file_paths = [], [], []
 
@@ -146,16 +220,7 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
         else:
             signal = np.pad(signal, (0, MAX_SAMPLES - len(signal)), mode="constant")
 
-        inputs = processor(
-            signal,
-            sampling_rate=SAMPLING_RATE,
-            return_tensors="pt",
-            padding=False,
-        )
-        input_values = inputs.input_values.to(device)
-
-        with torch.no_grad():
-            hidden = model(input_values).last_hidden_state.squeeze(0).cpu()
+        hidden = encode(signal)
 
         embeddings.append(hidden)
         labels.append(label_int)
@@ -165,7 +230,7 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
             print(f"  {i + 1}/{len(index)}")
 
     T_audio = embeddings[0].shape[0]
-    print(f"\nDone. T_audio={T_audio}, hidden_dim={spec.hidden_dim}, samples={len(embeddings)}")
+    print(f"\nDone. T_audio={T_audio}, hidden_dim={hidden_dim}, samples={len(embeddings)}")
 
     torch.save(
         {
@@ -175,9 +240,10 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
             "label2idx": label2idx,
             "idx2label": idx2label,
             "T_audio": T_audio,
-            "hidden_dim": spec.hidden_dim,
+            "hidden_dim": hidden_dim,
             "encoder": encoder_name,
-            "model_id": spec.model_id,
+            "model_id": model_id,
+            "pooled": pooled,
         },
         output_path,
     )
@@ -187,11 +253,12 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract audio encoder embeddings from AIBO.")
+    all_encoders = list(ENCODERS) + list(LALM_MODELS)
     parser.add_argument(
         "--encoder",
-        choices=list(ENCODERS),
+        choices=all_encoders,
         default="wav2vec2-base",
-        help=f"Encoder to use (default: wav2vec2-base). Options: {', '.join(ENCODERS)}",
+        help=f"Encoder to use (default: wav2vec2-base). Options: {', '.join(all_encoders)}",
     )
     parser.add_argument(
         "--output",
@@ -204,5 +271,12 @@ if __name__ == "__main__":
         default=None,
         help="Only process the first N samples (for smoke-testing).",
     )
+    parser.add_argument(
+        "--pooled",
+        action="store_true",
+        help=(
+            "Mean-pool each sample to a single (1, hidden_dim) vector at extraction time."
+        ),
+    )
     args = parser.parse_args()
-    extract(args.encoder, args.output, args.limit)
+    extract(args.encoder, args.output, args.limit, args.pooled)

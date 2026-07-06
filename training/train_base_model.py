@@ -392,6 +392,8 @@ if __name__ == "__main__":
             "wav2vec2-large-emotion",
             "wavlm-large",
             "hubert-large",
+            "qwen2-audio",
+            "audio-flamingo-3",
         ],
         help="Which encoder's embeddings to train on.",
     )

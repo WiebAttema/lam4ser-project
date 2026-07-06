@@ -188,7 +188,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--encoder",
         default="wavlm-large",
-        choices=["wav2vec2-base", "wav2vec2-large-emotion", "wavlm-large", "hubert-large"],
+        choices=[
+            "wav2vec2-base", "wav2vec2-large-emotion", "wavlm-large", "hubert-large",
+            "qwen2-audio", "audio-flamingo-3",
+        ],
         help="Encoder used for the embeddings (determines default embeddings path).",
     )
 
