@@ -1,0 +1,116 @@
+Foundation Model Encoder Swap: EMoDB + AIBO Results
+====================================================
+
+Swapped the audio encoder in the linear/MLP probe pipeline
+(baselines/embedding_probes.py) for the raw audio_tower output of two
+full audio-language models, instead of the SSL encoders (wav2vec2,
+WavLM, HuBERT) used before:
+
+  - Qwen2-Audio-7B     (Qwen/Qwen2-Audio-7B)
+  - Audio Flamingo 3   (nvidia/audio-flamingo-3-hf)
+
+Both are Whisper-style encoders (32 layers, 1280-dim), used pre-projection
+so directly comparable to the SSL encoders. Tested on EMoDB and AIBO with
+the same speaker-independent splits as the AudioGPT2 experiments.
+
+
+EMoDB (162 test samples, balanced, 7 classes)
+-----------------------------------------------
+System          Encoder                   Acc(%)   WF1(%)
+SVM + MFCC      —                          63.6     63.4
+Linear probe    wav2vec2-base              49.4     47.3
+Linear probe    HuBERT-large               75.3     75.7
+Linear probe    wav2vec2-large-emotion     85.2     85.1
+Linear probe    WavLM-large                87.0     87.1
+Linear probe    qwen2-audio                88.3     88.2   <- new
+MLP probe       wav2vec2-base              42.0     40.5
+MLP probe       HuBERT-large               81.5     81.4
+MLP probe       wav2vec2-large-emotion     85.8     86.1
+MLP probe       WavLM-large                92.6     92.5
+MLP probe       qwen2-audio                93.8     93.7   <- new, best in table
+AudioGPT2       wav2vec2-base              42.6     42.5
+AudioGPT2       HuBERT-large               78.4     78.6
+AudioGPT2       wav2vec2-large-emotion     93.2     93.2   <- previous best
+AudioGPT2       WavLM-large                88.3     88.2
+
+A bare MLP probe on Qwen2-Audio (93.8/93.7) beats the best AudioGPT2 fusion
+run (93.2/93.2), which needed an emotion-fine-tuned encoder to get there.
+Encoder choice alone explains most of the result on this dataset. (Test set
+is 162 samples, so 1pp ~= 1.6 samples -- read as "matches or slightly
+exceeds", not "decisively beats".)
+
+
+AIBO (8,257 test samples, 65% neutral, 5 classes)
+----------------------------------------------------
+System                           Acc(%)   WF1(%)   UAR(%)
+SVM + MFCC                        56.98    55.88    30.98
+Linear probe (WavLM)              51.19    54.91    44.71
+MLP probe (WavLM)                 49.29    52.80    41.09
+AudioGPT2 (WavLM)                 52.95    56.01    45.51   <- previous best UAR
+Linear probe (qwen2-audio)        56.26    57.96    42.64   <- new
+MLP probe (qwen2-audio)           56.69    58.31    39.56   <- new
+Linear probe (audio-flamingo-3)   60.05    60.50    42.97   <- new, best Acc/WF1
+MLP probe (audio-flamingo-3)      60.02    61.07    40.88   <- new, best WF1
+
+Both LALM encoders beat every WavLM-based system on accuracy and WF1, but
+both underperform AudioGPT2 on UAR -- the metric that matters most given the
+65% neutral imbalance. Per-class recall shows why:
+
+Class        AudioGPT2(WavLM)  qwen2-audio(lin)  audio-flamingo-3(lin)
+anger              56.5             60.4                47.0
+emphatic           47.9             32.7                42.2
+neutral            57.8             67.8                72.7
+positive           48.4             44.7                49.3
+rest               17.0              7.7                 3.7
+
+Both LALM encoders separate "neutral" better than WavLM+AudioGPT2, but are
+much worse on "rest" specifically (3.7-7.7% recall vs. 17.0%) -- consistent
+across two different vendors' encoders, so this looks like a real,
+structural weakness on this heterogeneous catch-all class, not noise.
+
+
+Padding / file size
+----------------------
+Full (non-pooled) per-frame embeddings would be ~65GB per encoder per
+dataset on AIBO (18,216 samples x 750 frames x 1280 dim x 4 bytes), vs.
+~17GB for the existing WavLM embeddings. The 750-frame figure is fixed
+regardless of clip length -- AIBO's median clip is 1.6s, but the
+Whisper-style feature extractor pads every clip to the same internal window
+either way.
+
+Tested whether this is avoidable
+(interpretability/check_variable_length_encoding.py): fed both encoders
+real AIBO clips with padding disabled at the feature-extractor level. Both
+crash with a fixed-shape mismatch as soon as the input isn't padded to the
+model's configured max length (max_source_positions=1500) -- confirmed
+separately for Qwen2-Audio and Audio Flamingo 3 (different error message,
+same root cause: a fixed-size assumption in the encoder itself, not
+something exposed through the feature extractor's padding option).
+
+So: extracted mean-pooled embeddings only for AIBO (93MB each, sufficient
+for the linear/MLP probes above), not the full 65GB per-frame version.
+
+
+Cost of full AudioGPT2 fusion training on these encoders (not attempted)
+----------------------------------------------------------------------------
+Would need full (non-pooled) embeddings per encoder per dataset (~65GB,
+~9-10h extraction each on AIBO), then a new AudioGPT2 training run per
+encoder on top of that. Both encoders on AIBO: ~130GB disk, ~18-20 GPU
+hours for extraction alone, before any training.
+
+
+Interpretation
+-----------------
+Independent evidence for the same conclusion as the logit-lens analysis:
+representation quality dominates over the fusion architecture. Logit-lens
+found AudioGPT2's cross-attention adapters contribute ~0 KL to the
+classifier's belief; this experiment shows a strong-enough encoder with
+just a linear/MLP head matches or beats the full fusion architecture on
+EMoDB, and comes close on AIBO except for the "rest"-class gap.
+
+Zhao et al.'s neuron-level ESN paper (emotion control in generative LALMs)
+found the structural mirror of this on a different task: emotion-control
+signal concentrates in LM-side decoder MLPs, while the audio encoder and
+synthesis modules are comparatively inert. Two different methods, two
+different tasks, same broad claim about where emotion-relevant computation
+lives in audio-LLM systems.
