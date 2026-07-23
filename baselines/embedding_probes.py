@@ -86,16 +86,17 @@ def _speaker_split(speaker_ids, val_speakers, test_speakers):
     return train_idx, val_idx, test_idx
 
 
-def _train(model, X_train, y_train, X_val, y_val, class_weights, device, epochs=300, lr=1e-3):
+def _train(model, X_train, y_train, X_val, y_val, class_weights, device, epochs=300, lr=1e-3,
+           batch_size=32, select="acc"):
     model = model.to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     loader = DataLoader(
         TensorDataset(X_train.to(device), y_train.to(device)),
-        batch_size=32, shuffle=True,
+        batch_size=batch_size, shuffle=True,
     )
 
-    best_val_acc, best_state = -1.0, None
+    best_score, best_state = -1.0, None
     for _ in range(epochs):
         model.train()
         for X_batch, y_batch in loader:
@@ -105,10 +106,16 @@ def _train(model, X_train, y_train, X_val, y_val, class_weights, device, epochs=
 
         model.eval()
         with torch.no_grad():
-            val_acc = (model(X_val.to(device)).argmax(dim=-1) == y_val.to(device)).float().mean().item()
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_state   = {k: v.clone() for k, v in model.state_dict().items()}
+            val_preds = model(X_val.to(device)).argmax(dim=-1)
+        if select == "uar":
+            # Guards against majority-class collapse looking good: on imbalanced
+            # sets an all-neutral epoch wins on accuracy but scores 1/C on UAR.
+            score = recall_score(y_val.numpy(), val_preds.cpu().numpy(), average="macro")
+        else:
+            score = (val_preds == y_val.to(device)).float().mean().item()
+        if score > best_score:
+            best_score = score
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
 
     model.load_state_dict(best_state)
     return model
