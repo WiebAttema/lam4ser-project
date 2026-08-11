@@ -40,6 +40,20 @@ FAMILY_RULES = [  # first keyword hit wins; mirrors the paper's seven families
     ("rhythm", ["Segments", "Pause", "rate", "Length"]),
 ]
 
+FIELDS = ["encoder", "layer", "sparsity", "factor", "family", "r2", "completeness", "entropy"]
+
+
+def load_csv(path):
+    rows = []
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            row["layer"] = int(row["layer"])
+            row["sparsity"] = row["sparsity"] if row["sparsity"] == "ref" else int(row["sparsity"])
+            for key in ("r2", "completeness", "entropy"):
+                row[key] = float(row[key])
+            rows.append(row)
+    return rows
+
 
 def factor_family(name):
     for family, keys in FAMILY_RULES:
@@ -72,9 +86,13 @@ def fit_factor(F_col, X, holdout, alpha, use_cv, seed):
     f = (F_col - f_mu) / f_sd
 
     if use_cv:
-        reg = LassoCV(alphas=np.logspace(-3, 0, 6), cv=3, max_iter=5000, n_jobs=-1)
+        # Each factor has a different natural scale, so calibrate the alpha
+        # path to this fit instead of using one fixed grid for every factor.
+        alpha_max = max(np.max(np.abs(Xs[fit_idx].T @ f[fit_idx])) / n_fit, 1e-8)
+        alphas = np.logspace(np.log10(alpha_max * 1e-2), np.log10(alpha_max), 6)
+        reg = LassoCV(alphas=alphas, cv=3, max_iter=100000, n_jobs=-1)
     else:
-        reg = Lasso(alpha=alpha, max_iter=5000)
+        reg = Lasso(alpha=alpha, max_iter=20000)
     reg.fit(Xs[fit_idx], f[fit_idx])
     r2 = reg.score(Xs[eval_idx], f[eval_idx])
 
@@ -246,6 +264,7 @@ if __name__ == "__main__":
                         help="LassoCV instead of a fixed alpha (much slower).")
     parser.add_argument("--scatter-sparsity", type=int, default=90)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     device = pick_device()
@@ -267,12 +286,31 @@ if __name__ == "__main__":
             continue
         groups.setdefault((meta["encoder"], meta["layer"]), []).append(path)
 
-    all_rows = []
+    csv_path = os.path.join(args.out_dir, f"disentanglement_{args.dataset}.csv")
+    existing = load_csv(csv_path) if args.resume and os.path.exists(csv_path) else []
+    done = {(r["encoder"], r["layer"], r["sparsity"]) for r in existing}
+    if existing:
+        print(f"Resuming: {len(existing)} rows already in {csv_path}")
+    all_rows = list(existing)
+
+    csv_file = open(csv_path, "a" if existing else "w", newline="")
+    writer = csv.DictWriter(csv_file, fieldnames=FIELDS)
+    if not existing:
+        writer.writeheader()
+        csv_file.flush()
+
     coefs_dir = os.path.join(args.out_dir, "lasso_coefs")
     os.makedirs(coefs_dir, exist_ok=True)
     rng = np.random.RandomState(args.seed)
 
     for (encoder, layer), ckpts in groups.items():
+        ckpts = sorted(ckpts)
+        metas = [load_checkpoint(p)[1] for p in ckpts]  # cheap: state dict only
+        needed = [(encoder, layer, "ref")] + [(encoder, layer, m["sparsity"]) for m in metas]
+        if all(key in done for key in needed):
+            print(f"[skip] {encoder} L{layer}: already done")
+            continue
+
         data = load_layerwise(args.dataset, encoder, args.embeddings_dir,
                               path=args.embeddings)
         _, _, test_idx = split_indices(data, args.dataset)
@@ -291,18 +329,24 @@ if __name__ == "__main__":
 
         # Reference: the original (standardized) representation.
         mu, sd = None, None
-        for path in sorted(ckpts):
+        for path in ckpts:
             model, meta = load_checkpoint(path, device)
             if mu is None:
                 mu, sd = meta["mu"], meta["sd"]
-                Xs = ((X_test - mu) / sd).numpy()
-                print(f"\n=== {encoder} L{layer}: reference (original representation)")
-                rows, _ = analyze(
-                    Xs, F_test, factor_names, entropies,
-                    {"encoder": encoder, "layer": layer, "sparsity": "ref"},
-                    args, args.seed,
-                )
-                all_rows.extend(rows)
+                if (encoder, layer, "ref") not in done:
+                    Xs = ((X_test - mu) / sd).numpy()
+                    print(f"\n=== {encoder} L{layer}: reference (original representation)")
+                    rows, _ = analyze(
+                        Xs, F_test, factor_names, entropies,
+                        {"encoder": encoder, "layer": layer, "sparsity": "ref"},
+                        args, args.seed,
+                    )
+                    for row in rows:
+                        writer.writerow(row)
+                    csv_file.flush()
+                    all_rows.extend(rows)
+            if (encoder, layer, meta["sparsity"]) in done:
+                continue
             Z = encode_dataset(model, X_test, meta["mu"], meta["sd"], device).numpy()
             print(f"=== {encoder} L{layer}: SAE at {meta['sparsity']}% sparsity")
             rows, coef_matrix = analyze(
@@ -310,6 +354,9 @@ if __name__ == "__main__":
                 {"encoder": encoder, "layer": layer, "sparsity": meta["sparsity"]},
                 args, args.seed,
             )
+            for row in rows:
+                writer.writerow(row)
+            csv_file.flush()
             all_rows.extend(rows)
             np.savez_compressed(
                 os.path.join(coefs_dir,
@@ -317,11 +364,7 @@ if __name__ == "__main__":
                 coefs=coef_matrix, factor_names=np.array(factor_names),
             )
 
-    csv_path = os.path.join(args.out_dir, f"disentanglement_{args.dataset}.csv")
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(all_rows)
+    csv_file.close()
     print(f"\nSaved → {csv_path}")
 
     make_figures(all_rows, args)
