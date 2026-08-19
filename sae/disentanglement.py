@@ -35,8 +35,10 @@ FAMILY_RULES = [  # first keyword hit wins; mirrors the paper's seven families
     ("formants", ["F1", "F2", "F3", "formant"]),
     ("mfcc", ["mfcc"]),
     ("quality", ["jitter", "shimmer", "HNR"]),
-    ("spectral", ["alphaRatio", "slope", "Flux", "Hammarberg"]),
+    # Before "spectral": loudness_sma3_meanRisingSlope and friends contain
+    # "slope" and would otherwise be filed as spectral shape.
     ("loudness", ["loudness", "equivalentSoundLevel"]),
+    ("spectral", ["alphaRatio", "slope", "Flux", "Hammarberg"]),
     ("rhythm", ["Segments", "Pause", "rate", "Length"]),
 ]
 
@@ -51,6 +53,9 @@ def load_csv(path):
             row["sparsity"] = row["sparsity"] if row["sparsity"] == "ref" else int(row["sparsity"])
             for key in ("r2", "completeness", "entropy"):
                 row[key] = float(row[key])
+            # Recomputed, not trusted: rows written before the loudness/spectral
+            # ordering fix have a stale family label.
+            row["family"] = factor_family(row["factor"])
             rows.append(row)
     return rows
 
