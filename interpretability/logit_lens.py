@@ -49,7 +49,7 @@ def build_config(dataset, encoder, prompt_type):
         "val_speakers": ds["val_speakers"],
         "test_speakers": ds["test_speakers"],
         "prompt_type": prompt_type,
-        "max_prompt_length": 64 if "feature" in prompt_type else 32,
+        "max_prompt_length": 32,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
         "output_dir": f"interpretability/outputs/{dataset}_{encoder}_{prompt_type}",
     }

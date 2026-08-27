@@ -22,3 +22,21 @@ AIBO_runs.txt
 
 # SLURM logs
 *.out
+
+presentation/
+
+results/
+
+# SAE pipeline: code is tracked, generated outputs (checkpoints, CSVs, figures) are not.
+# The wildcard also covers scratch/diagnostic dirs like sae/outputs_seed1.
+sae/outputs*/
+
+LAM4SER final report
+
+LAM4SER midterm report
+
+sae/OVERVIEW.md
+sae/README.md
+
+# Claude Code local state
+.claude/
