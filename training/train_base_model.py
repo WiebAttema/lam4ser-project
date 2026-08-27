@@ -62,7 +62,7 @@ def _build_config(
         "dataset": dataset,
         "encoder": encoder,
         "prompt_type": prompt_type,
-        "max_prompt_length": 64 if "feature" in prompt_type else 32,
+        "max_prompt_length": 32,
         "lora_rank": lora_rank,
         "lora_lr": lora_lr,
         "embeddings_path": f"embeddings/{ds['embeddings_prefix']}{encoder}_embeddings.pt",

@@ -192,7 +192,7 @@ def extract(encoder_name: str, output_path: str | None = None, limit: int | None
     print(f"\nLoading {model_id}...")
     shapes_printed = False
     if is_lalm:
-        # Load the full model once, keep only the audio encoder submodule, 
+        # Load the full model once, keep only the audio encoder submodule,
         # and drop the second half.
         processor = AutoProcessor.from_pretrained(model_id)
         feature_extractor = processor.feature_extractor

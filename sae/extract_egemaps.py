@@ -1,18 +1,13 @@
-"""
-Extract eGeMAPS functionals (88 voice descriptors: pitch, loudness, jitter,
-shimmer, formants, MFCC, spectral shape, rhythm) for every AIBO clip, for
-disentanglement.py to regress the SAE codes against.
+"""Extract the 88 eGeMAPS functionals (pitch, loudness, jitter, shimmer, formants,
+MFCC, spectral shape, rhythm) for every AIBO clip, so disentanglement.py can
+regress the SAE codes against them.
 
-Runs where the AIBO wavs live (the cluster), same AIBO_DATA_DIR convention as
-models/audio_encoder/preprocessing_aibo.py. Rows follow the label-file order,
-same as the embeddings, so downstream alignment is positional plus a basename
-check.
+Rows follow the label-file order, so alignment with the embeddings is positional
+plus a basename check. Needs opensmile and the raw wavs, so it runs wherever
+AIBO_DATA_DIR points.
 
-Needs:  pip install opensmile
-
-How to run:
-AIBO_DATA_DIR=/data/... python sae/extract_egemaps.py
-python sae/extract_egemaps.py --limit 5     # smoke test
+    AIBO_DATA_DIR=/data/... python sae/extract_egemaps.py
+    python sae/extract_egemaps.py --limit 5     # smoke test
 """
 import argparse
 import csv

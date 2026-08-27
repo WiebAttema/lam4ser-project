@@ -1,17 +1,13 @@
-"""
-Factor-driven SAE ablation. selective_units.py ranks dictionary units by which
-emotion class they fire on; this ranks them by which eGeMAPS property loads on
-them (using the Lasso weights disentanglement.py already saved), zeroes those
-units at test time, and reports the effect on every emotion class.
+"""Factor-driven SAE ablation. Where selective_units.py ranks dictionary units by
+the emotion class they fire on, this ranks them by which eGeMAPS property loads
+on them, reusing the Lasso weights from disentanglement.py. It zeroes those
+units at test time and reports the effect on every emotion class.
 
 Each ablation is compared against zeroing the same number of random active
-units, so a drop only counts if it beats that control. Overlap with the
-class-selective units is reported too, which is what links a factor (e.g.
-loudness) back to a class (e.g. emphatic).
+units, so a drop only counts if it beats that control.
 
-How to run (after train_sae.py and disentanglement.py):
-python sae/factor_units.py
-python sae/factor_units.py --families loudness quality --ablate 5 10 20 40
+    python sae/factor_units.py
+    python sae/factor_units.py --families loudness quality --ablate 5 10 20 40
 """
 import argparse
 import csv

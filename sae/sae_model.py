@@ -1,15 +1,13 @@
-"""
-TopK sparse autoencoder used by the rest of sae/. Follows the TopK SAE from
-Mariotte et al. 2025 (arXiv 2509.24793) / Gao et al. 2025:
+"""TopK sparse autoencoder used by the rest of sae/. Follows Mariotte et al. 2025
+(arXiv 2509.24793) and Gao et al. 2025:
 
     z     = TopK(ReLU(W_e x + b_e))
     x_hat = W_d z
     loss  = MSE(x_hat, x)
 
-Tied init and unit-norm decoder rows are standard TopK-SAE stabilizers, not
-spelled out in the paper. Inputs are z-scored with train-split statistics
-before the SAE (mid-layer activations vary a lot in scale); the stats are
-stored in the checkpoint so codes decode consistently at load time.
+Tied init and unit-norm decoder rows are standard TopK stabilizers the paper
+does not spell out. Inputs are z-scored with train-split statistics, stored in
+the checkpoint so codes decode consistently at load time.
 """
 import csv
 import math

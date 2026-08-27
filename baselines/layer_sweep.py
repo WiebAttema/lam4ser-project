@@ -1,17 +1,14 @@
-"""
-Per-layer probe sweep on layerwise mean-pooled embeddings.
+"""Per-layer probe sweep on layerwise mean-pooled embeddings.
 
-Trains a linear and MLP probe per layer per encoder. Layers are z-scored with 
-train-split statistics before probing, and checkpoints on AIBO are selected on 
-validation UAR. Rows are appended to the CSV as they finish; rerun with --resume 
-to skip rows already written.
+Trains a linear and an MLP probe per layer per encoder. Layers are z-scored with
+train-split statistics. Each probe keeps its best epoch on validation UAR, but
+only test metrics are written, so ranking layers by the CSV ranks them on test.
+Rows are appended as they finish; use --resume to skip rows already written.
 
-Needs embeddings extracted with:
-python models/audio_encoder/preprocessing_aibo.py --encoder qwen2-audio --layerwise
+Needs embeddings from preprocessing_aibo.py --layerwise.
 
-How to run:
-python baselines/layer_sweep.py --dataset aibo --encoders qwen2-audio audio-flamingo-3 wavlm-large
-python baselines/layer_sweep.py --dataset aibo --encoders qwen2-audio --resume
+    python baselines/layer_sweep.py --dataset aibo --encoders wavlm-large qwen2-audio
+    python baselines/layer_sweep.py --dataset aibo --encoders qwen2-audio --resume
 """
 import os
 import sys

@@ -1,6 +1,6 @@
 import torch
 
-from models.cross_attention import CrossAttentionAdapter
+from models.fusion.cross_attention import CrossAttentionAdapter
 
 
 def test_cross_attention_shapes():

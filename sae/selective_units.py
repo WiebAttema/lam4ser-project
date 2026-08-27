@@ -1,16 +1,11 @@
-"""
-Class-selective SAE units and a causal ablation test. For each encoder: rank
-dictionary units by how much more they fire on one class than the rest
-(selectivity), name the top units via the eGeMAPS Lasso coefficients from
-disentanglement.py, then zero the top units of a target class at test time and
-check whether recall for that class drops while the other classes hold.
+"""Class-selective SAE units and a causal ablation test. For each encoder, rank
+dictionary units by how much more they fire on one class than on the rest, name
+the top units via the eGeMAPS Lasso coefficients from disentanglement.py, then
+zero a target class's top units at test time and check whether that class's
+recall drops while the others hold.
 
-The headline output is the cross-encoder summary: how many selective units each
-encoder's dictionary contains per class, and how much recall they carry.
-
-How to run (after train_sae.py; unit naming needs disentanglement.py):
-python sae/selective_units.py                       # every class
-python sae/selective_units.py --targets emphatic positive
+    python sae/selective_units.py                       # every class
+    python sae/selective_units.py --targets emphatic positive
 """
 import argparse
 import csv
